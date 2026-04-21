@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Markdown → Opika PDF</title>
+  <style>
+    :root {
+      --navy: #305a81;
+      --pink: #ff4d71;
+      --bg: #f4f6f9;
+      --text: #212c35;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: system-ui, Segoe UI, sans-serif;
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+    header {
+      background: var(--navy);
+      color: #fff;
+      padding: 1rem 1.5rem;
+      border-bottom: 3px solid var(--pink);
+    }
+    header h1 { margin: 0; font-size: 1.25rem; font-weight: 600; }
+    header p { margin: 0.35rem 0 0; opacity: 0.9; font-size: 0.9rem; }
+    main { max-width: 960px; margin: 0 auto; padding: 1.5rem; }
+    label { display: block; font-weight: 600; margin-bottom: 0.5rem; }
+    textarea {
+      width: 100%;
+      min-height: 320px;
+      padding: 0.75rem;
+      font-family: ui-monospace, Consolas, monospace;
+      font-size: 13px;
+      border: 1px solid #c6ccd7;
+      border-radius: 6px;
+      resize: vertical;
+    }
+    .row { display: flex; flex-wrap: wrap; gap: 1rem; margin: 1rem 0; }
+    .row label { font-weight: 500; }
+    .row input[type="text"] {
+      flex: 1;
+      min-width: 200px;
+      padding: 0.5rem 0.65rem;
+      border: 1px solid #c6ccd7;
+      border-radius: 6px;
+    }
+    button {
+      background: var(--pink);
+      color: #fff;
+      border: none;
+      padding: 0.65rem 1.25rem;
+      font-size: 1rem;
+      font-weight: 600;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    button:hover { filter: brightness(1.05); }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    .err { color: #e03e3e; margin-top: 0.75rem; font-size: 0.9rem; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Markdown → Opika PDF</h1>
+    <p>Paste markdown below and download a branded PDF (local, no external APIs).</p>
+  </header>
+  <main>
+    <label for="md">Markdown</label>
+    <textarea id="md" placeholder="# Your title&#10;&#10;Body **bold** and *italic*."></textarea>
+    <div class="row">
+      <label>Title (optional) <input type="text" id="title" placeholder="Overrides first # heading" /></label>
+      <label>Subtitle (optional) <input type="text" id="subtitle" placeholder="Cover subtitle" /></label>
+    </div>
+    <button type="button" id="go">Generate PDF</button>
+    <p class="err" id="err" hidden></p>
+  </main>
+  <script>
+    const md = document.getElementById('md');
+    const titleEl = document.getElementById('title');
+    const subtitleEl = document.getElementById('subtitle');
+    const go = document.getElementById('go');
+    const err = document.getElementById('err');
+
+    function showError(msg) {
+      err.textContent = msg;
+      err.hidden = !msg;
+    }
+
+    go.addEventListener('click', async () => {
+      showError('');
+      const body = md.value;
+      if (!body.trim()) {
+        showError('Paste some markdown first.');
+        return;
+      }
+      go.disabled = true;
+      try {
+        const q = new URLSearchParams();
+        if (titleEl.value.trim()) q.set('title', titleEl.value.trim());
+        if (subtitleEl.value.trim()) q.set('subtitle', subtitleEl.value.trim());
+        const url = '/convert' + (q.toString() ? '?' + q.toString() : '');
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+          body,
+        });
+        if (!res.ok) {
+          const t = await res.text();
+          throw new Error(t || res.statusText);
+        }
+        const blob = await res.blob();
+        const cd = res.headers.get('Content-Disposition');
+        let filename = 'document.pdf';
+        const m = cd && cd.match(/filename="([^"]+)"/);
+        if (m) filename = m[1];
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(a.href);
+      } catch (e) {
+        showError(e.message || String(e));
+      } finally {
+        go.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
