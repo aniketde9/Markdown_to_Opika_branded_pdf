@@ -6,8 +6,15 @@ const { buildPDF, inferTitle } = require('./builder');
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3847;
-const HOST = process.env.HOST || '127.0.0.1';
+// Render and other hosts require listening on all interfaces; keep localhost for local dev.
+const HOST =
+  process.env.HOST ||
+  (process.env.NODE_ENV === 'production' ? '0.0.0.0' : '127.0.0.1');
 const BODY_LIMIT = process.env.BODY_LIMIT || '10mb';
+
+app.get('/health', (_req, res) => {
+  res.status(200).type('text/plain').send('ok');
+});
 
 app.use(express.static(path.join(__dirname, '../public')));
 app.use(express.text({ type: ['text/plain', 'text/markdown'], limit: BODY_LIMIT }));
@@ -63,5 +70,9 @@ app.post('/convert', async (req, res) => {
 });
 
 app.listen(PORT, HOST, () => {
-  console.log(`md-to-pdf server http://${HOST}:${PORT}`);
+  const where =
+    HOST === '0.0.0.0'
+      ? `port ${PORT} (0.0.0.0 — use your Render URL or http://localhost:${PORT})`
+      : `http://${HOST}:${PORT}`;
+  console.log(`md-to-pdf server ${where}`);
 });

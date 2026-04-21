@@ -1,0 +1,12 @@
+# Render Blueprint: https://render.com/docs/blueprint-spec
+# After connect: pick instance type (e.g. Free) in the dashboard if you change plan.
+services:
+  - type: web
+    name: opika-md-to-pdf
+    runtime: node
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
