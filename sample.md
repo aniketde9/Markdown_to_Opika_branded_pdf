@@ -107,5 +107,5 @@ cta:
   line2: Reply with a "Yes" to this email and we'll send over your benchmark analysis.
   email: Raunak@opika.co
 ---
-
 Optional notes below YAML are ignored for `template: emm`.
+

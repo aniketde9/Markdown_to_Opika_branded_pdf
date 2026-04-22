@@ -1,8 +1,243 @@
 'use strict';
 
 const BRAND = require('./brand');
+const { decodeHtmlEntities } = require('./htmlEntities');
+const { Lexer } = require('marked');
 
 const E = () => BRAND.emm;
+
+/** Opika brand blue for inline **…** emphasis (body copy). */
+const OPIKA_EMPHASIS = BRAND.color.navy;
+
+/**
+ * Turn Marked inline tokens into { bold, text } runs (bold only inside strong / __).
+ */
+function flattenStrongOnly(tokens, inStrong = false) {
+  const pieces = [];
+  for (const t of tokens || []) {
+    switch (t.type) {
+      case 'text':
+      case 'escape':
+        pieces.push({ bold: inStrong, text: decodeHtmlEntities(t.text || '') });
+        break;
+      case 'strong':
+        pieces.push(...flattenStrongOnly(t.tokens, true));
+        break;
+      case 'em':
+        pieces.push(...flattenStrongOnly(t.tokens, inStrong));
+        break;
+      case 'link':
+      case 'image':
+        pieces.push(...flattenStrongOnly(t.tokens, inStrong));
+        break;
+      case 'codespan':
+        pieces.push({ bold: inStrong, text: decodeHtmlEntities(t.text || '') });
+        break;
+      case 'br':
+        pieces.push({ bold: inStrong, text: '\n' });
+        break;
+      case 'del':
+        pieces.push(...flattenStrongOnly(t.tokens, inStrong));
+        break;
+      default:
+        pieces.push({ bold: inStrong, text: decodeHtmlEntities(t.text || t.raw || '') });
+    }
+  }
+  return pieces;
+}
+
+function mergeAdjacentStrongRuns(runs) {
+  const out = [];
+  for (const r of runs) {
+    if (!r.text) continue;
+    const last = out[out.length - 1];
+    if (last && last.bold === r.bold) last.text += r.text;
+    else out.push({ bold: r.bold, text: r.text });
+  }
+  return out.filter((x) => x.text.length > 0);
+}
+
+function parseStrongRuns(source) {
+  const s = String(source || '').trim();
+  if (!s) return [];
+  try {
+    const tokens = Lexer.lexInline(s);
+    if (!tokens || tokens.length === 0) return [{ bold: false, text: s }];
+    const runs = mergeAdjacentStrongRuns(flattenStrongOnly(tokens, false));
+    return runs.length > 0 ? runs : [{ bold: false, text: s }];
+  } catch {
+    return [{ bold: false, text: s }];
+  }
+}
+
+const BODY_SIZE = () => BRAND.size.body;
+
+/** Split runs into words / whitespace chunks (and explicit newlines from marked `br`). */
+function runsToWordTokens(runs) {
+  const tokens = [];
+  for (const run of runs) {
+    const parts = String(run.text || '').split('\n');
+    parts.forEach((seg, si) => {
+      if (si > 0) tokens.push({ bold: run.bold, text: '\n', newline: true });
+      const chunks = seg.split(/(\s+)/);
+      for (const c of chunks) {
+        if (c) tokens.push({ bold: run.bold, text: c, newline: false });
+      }
+    });
+  }
+  return tokens;
+}
+
+function measureTokenWidth(doc, tok) {
+  doc.font(tok.bold ? BRAND.font.bold : BRAND.font.regular).fontSize(BODY_SIZE());
+  return doc.widthOfString(tok.text, { lineBreak: false });
+}
+
+/**
+ * Break overlong token (single word) across lines to fit width.
+ */
+function splitOversizeToken(doc, tok, maxW) {
+  if (maxW <= 0) return [tok];
+  const out = [];
+  let rest = tok.text;
+  doc.font(tok.bold ? BRAND.font.bold : BRAND.font.regular).fontSize(BODY_SIZE());
+  while (rest.length) {
+    let lo = 1;
+    let hi = rest.length;
+    let fit = 1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      const w = doc.widthOfString(rest.slice(0, mid), { lineBreak: false });
+      if (w <= maxW) {
+        fit = mid;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    if (fit < 1) fit = 1;
+    out.push({ bold: tok.bold, text: rest.slice(0, fit), newline: false });
+    rest = rest.slice(fit);
+  }
+  return out;
+}
+
+/**
+ * Layout word tokens into lines. First line uses firstW; wrapped lines use contW (e.g. full width after a numbered prefix).
+ * startX per line: firstX then contX (PDFKit `continued` cannot mix inline fonts on one line).
+ */
+function layoutStrongLines(doc, runs, firstX, firstW, contX, contW) {
+  const contXf = contX === undefined ? firstX : contX;
+  const contWf = contW === undefined ? firstW : contW;
+  const raw = runsToWordTokens(runs);
+  const lines = [];
+  let line = [];
+  let used = 0;
+  let lineStartX = firstX;
+  let curMaxW = firstW;
+
+  const isOnlyWs = (t) => !t.newline && /^\s+$/.test(t.text);
+  const flush = () => {
+    if (line.length) {
+      lines.push({ startX: lineStartX, tokens: line });
+      line = [];
+      used = 0;
+      lineStartX = contXf;
+      curMaxW = contWf;
+    }
+  };
+
+  let i = 0;
+  while (i < raw.length) {
+    const t = raw[i];
+    if (t.newline) {
+      flush();
+      i++;
+      continue;
+    }
+    let tw = measureTokenWidth(doc, t);
+    if (tw > curMaxW && !isOnlyWs(t)) {
+      const parts = splitOversizeToken(doc, t, curMaxW);
+      for (const p of parts) {
+        const pw = measureTokenWidth(doc, p);
+        if (line.length && used + pw > curMaxW) flush();
+        if (!line.length && isOnlyWs(p)) continue;
+        line.push(p);
+        used += pw;
+      }
+      i++;
+      continue;
+    }
+    if (line.length === 0 && isOnlyWs(t)) {
+      i++;
+      continue;
+    }
+    if (line.length === 0) {
+      line.push(t);
+      used = tw;
+      i++;
+      continue;
+    }
+    if (used + tw <= curMaxW) {
+      line.push(t);
+      used += tw;
+      i++;
+    } else {
+      flush();
+    }
+  }
+  flush();
+  return lines;
+}
+
+function lineHeightForRuns(doc, lineGap) {
+  doc.font(BRAND.font.bold).fontSize(BODY_SIZE());
+  const hBold = doc.currentLineHeight(true);
+  doc.font(BRAND.font.regular).fontSize(BODY_SIZE());
+  const hReg = doc.currentLineHeight(true);
+  return Math.max(hBold, hReg) + lineGap;
+}
+
+function heightOfStrongRuns(doc, runs, width, lineGap, contW) {
+  if (runs.length === 0) return 0;
+  const contWf = contW === undefined ? width : contW;
+  const lines = layoutStrongLines(doc, runs, 0, width, 0, contWf);
+  if (lines.length === 0) return 0;
+  const lh = lineHeightForRuns(doc, lineGap);
+  return lines.length * lh;
+}
+
+/**
+ * Mixed regular + **bold** on the same line: manual wrap (avoids PDFKit `continued` newline bug).
+ * Optional contX/contW: wrapped lines start at contX with width contW (numbered list body).
+ */
+function emitStrongRuns(doc, runs, x, y, width, lineGap, baseColor, contX, contW) {
+  if (runs.length === 0) return;
+  const startX = x != null ? x : doc.x;
+  const startY = y != null ? y : doc.y;
+  const contXf = contX === undefined ? startX : contX;
+  const contWf = contW === undefined ? width : contW;
+  const size = BODY_SIZE();
+  const lines = layoutStrongLines(doc, runs, startX, width, contXf, contWf);
+  const lh = lineHeightForRuns(doc, lineGap);
+  let lineY = startY;
+
+  for (const row of lines) {
+    let cx = row.startX;
+    for (const tok of row.tokens) {
+      doc
+        .font(tok.bold ? BRAND.font.bold : BRAND.font.regular)
+        .fontSize(size)
+        .fillColor(tok.bold ? OPIKA_EMPHASIS : baseColor)
+        .text(tok.text, cx, lineY, { lineBreak: false });
+      cx += measureTokenWidth(doc, tok);
+    }
+    lineY += lh;
+  }
+  doc.x = contXf;
+  doc.y = lineY;
+  doc.font(BRAND.font.regular).fontSize(size).fillColor(baseColor);
+}
 
 function contentBottom() {
   return BRAND.bodyContentMaxY;
@@ -31,12 +266,19 @@ function flowParagraph(doc, text) {
   if (!t) return;
   const w = cw();
   const lg = E().lineGap;
-  const font = BRAND.font.regular;
   const size = BRAND.size.body;
-  const oneLine = doc.heightOfString('Mg', { font, size, width: w, lineGap: lg });
+  const base = BRAND.color.dark;
+  const oneLine = doc.heightOfString('Mg', { font: BRAND.font.regular, size, width: w, lineGap: lg });
   ensureRoom(doc, oneLine + 4);
-  doc.font(font).fontSize(size).fillColor(BRAND.color.dark);
-  doc.text(t, ml(), doc.y, { width: w, lineBreak: true, lineGap: lg });
+  const runs = parseStrongRuns(t);
+  const hasEmphasis = runs.some((r) => r.bold);
+  if (!hasEmphasis) {
+    doc.font(BRAND.font.regular).fontSize(size).fillColor(base);
+    doc.text(t, ml(), doc.y, { width: w, lineBreak: true, lineGap: lg });
+  } else {
+    emitStrongRuns(doc, runs, ml(), doc.y, w, lg, base);
+  }
+  doc.font(BRAND.font.regular).fontSize(size).fillColor(base);
   doc.y += BRAND.space.afterPara;
 }
 
@@ -384,19 +626,31 @@ function drawObservationCallout(doc, obs) {
   const pad = E().calloutPadX;
   const innerW = w - bar - pad * 2;
   const lg = E().lineGap;
+  const pink = BRAND.color.pink;
+  const dark = BRAND.color.dark;
+
+  const leadRuns = lead ? parseStrongRuns(lead) : [];
+  const bodyRuns = body ? parseStrongRuns(body) : [];
+  const singleRuns = !lead || !body ? parseStrongRuns(lead || body) : [];
+
   let textH = 0;
   if (lead && body) {
-    textH =
-      doc.heightOfString(lead, { font: BRAND.font.bold, size: BRAND.size.body, width: innerW, lineGap: lg }) +
-      E().calloutInteriorGap +
-      doc.heightOfString(body, { font: BRAND.font.regular, size: BRAND.size.body, width: innerW, lineGap: lg });
+    const leadH = leadRuns.some((r) => r.bold)
+      ? heightOfStrongRuns(doc, leadRuns, innerW, lg)
+      : doc.heightOfString(lead, { font: BRAND.font.bold, size: BRAND.size.body, width: innerW, lineGap: lg });
+    const bodyH = bodyRuns.some((r) => r.bold)
+      ? heightOfStrongRuns(doc, bodyRuns, innerW, lg)
+      : doc.heightOfString(body, { font: BRAND.font.regular, size: BRAND.size.body, width: innerW, lineGap: lg });
+    textH = leadH + E().calloutInteriorGap + bodyH;
   } else {
-    textH = doc.heightOfString(lead || body, {
-      font: BRAND.font.regular,
-      size: BRAND.size.body,
-      width: innerW,
-      lineGap: lg,
-    });
+    const single = lead || body;
+    if (singleRuns.some((r) => r.bold)) {
+      textH = heightOfStrongRuns(doc, singleRuns, innerW, lg);
+    } else if (lead) {
+      textH = doc.heightOfString(single, { font: BRAND.font.bold, size: BRAND.size.body, width: innerW, lineGap: lg });
+    } else {
+      textH = doc.heightOfString(single, { font: BRAND.font.regular, size: BRAND.size.body, width: innerW, lineGap: lg });
+    }
   }
   const boxH = textH + E().calloutPadY * 2;
   ensureRoom(doc, boxH + 16);
@@ -409,22 +663,34 @@ function drawObservationCallout(doc, obs) {
   let ty = y0 + E().calloutPadY;
   const tx = boxX + bar + pad;
   if (lead && body) {
-    doc.font(BRAND.font.bold).fontSize(BRAND.size.body).fillColor(BRAND.color.pink);
-    doc.text(lead, tx, ty, { width: innerW, lineBreak: true, lineGap: lg });
-    ty =
-      ty +
-      doc.heightOfString(lead, {
-        font: BRAND.font.bold,
-        size: BRAND.size.body,
-        width: innerW,
-        lineGap: lg,
-      }) +
+    if (leadRuns.some((r) => r.bold)) {
+      emitStrongRuns(doc, leadRuns, tx, ty, innerW, lg, pink);
+    } else {
+      doc.font(BRAND.font.bold).fontSize(BRAND.size.body).fillColor(pink);
+      doc.text(lead, tx, ty, { width: innerW, lineBreak: true, lineGap: lg });
+    }
+    ty +=
+      (leadRuns.some((r) => r.bold)
+        ? heightOfStrongRuns(doc, leadRuns, innerW, lg)
+        : doc.heightOfString(lead, { font: BRAND.font.bold, size: BRAND.size.body, width: innerW, lineGap: lg })) +
       E().calloutInteriorGap;
-    doc.font(BRAND.font.regular).fillColor(BRAND.color.dark);
-    doc.text(body, tx, ty, { width: innerW, lineBreak: true, lineGap: lg });
+    if (bodyRuns.some((r) => r.bold)) {
+      emitStrongRuns(doc, bodyRuns, tx, ty, innerW, lg, dark);
+    } else {
+      doc.font(BRAND.font.regular).fillColor(dark);
+      doc.text(body, tx, ty, { width: innerW, lineBreak: true, lineGap: lg });
+    }
   } else {
-    doc.font(BRAND.font.regular).fontSize(BRAND.size.body).fillColor(BRAND.color.dark);
-    doc.text(lead || body, tx, ty, { width: innerW, lineBreak: true, lineGap: lg });
+    const single = lead || body;
+    if (singleRuns.some((r) => r.bold)) {
+      emitStrongRuns(doc, singleRuns, tx, ty, innerW, lg, lead ? pink : dark);
+    } else if (lead) {
+      doc.font(BRAND.font.bold).fontSize(BRAND.size.body).fillColor(pink);
+      doc.text(single, tx, ty, { width: innerW, lineBreak: true, lineGap: lg });
+    } else {
+      doc.font(BRAND.font.regular).fontSize(BRAND.size.body).fillColor(dark);
+      doc.text(single, tx, ty, { width: innerW, lineBreak: true, lineGap: lg });
+    }
   }
 
   doc.y = y0 + boxH + BRAND.space.afterPara;
@@ -446,9 +712,17 @@ function drawCtaCallout(doc, cta) {
     { text: email, font: BRAND.font.bold },
   ].filter((b) => b.text);
 
+  function blockHeight(text, isEmail) {
+    if (isEmail) {
+      return doc.heightOfString(text, { font: BRAND.font.bold, size: BRAND.size.body, width: innerW, lineGap: lg });
+    }
+    const runs = parseStrongRuns(text);
+    return runs.some((r) => r.bold) ? heightOfStrongRuns(doc, runs, innerW, lg) : doc.heightOfString(text, { font: BRAND.font.regular, size: BRAND.size.body, width: innerW, lineGap: lg });
+  }
+
   let textH = 0;
   blocks.forEach((b, i) => {
-    textH += doc.heightOfString(b.text, { font: b.font, size: BRAND.size.body, width: innerW, lineGap: lg });
+    textH += blockHeight(b.text, b.font === BRAND.font.bold);
     if (i < blocks.length - 1) textH += E().calloutInteriorGap;
   });
   const boxH = textH + E().calloutPadY * 2;
@@ -463,11 +737,19 @@ function drawCtaCallout(doc, cta) {
   const tx = boxX + bar + pad;
   blocks.forEach((b, i) => {
     const isEmail = b.font === BRAND.font.bold;
-    doc.font(b.font).fontSize(BRAND.size.body).fillColor(isEmail ? BRAND.color.navy : BRAND.color.dark);
-    doc.text(b.text, tx, ty, { width: innerW, lineBreak: true, lineGap: lg });
-    ty +=
-      doc.heightOfString(b.text, { font: b.font, size: BRAND.size.body, width: innerW, lineGap: lg }) +
-      (i < blocks.length - 1 ? E().calloutInteriorGap : 0);
+    if (isEmail) {
+      doc.font(BRAND.font.bold).fontSize(BRAND.size.body).fillColor(BRAND.color.navy);
+      doc.text(b.text, tx, ty, { width: innerW, lineBreak: true, lineGap: lg });
+    } else {
+      const runs = parseStrongRuns(b.text);
+      if (runs.some((r) => r.bold)) {
+        emitStrongRuns(doc, runs, tx, ty, innerW, lg, BRAND.color.dark);
+      } else {
+        doc.font(BRAND.font.regular).fontSize(BRAND.size.body).fillColor(BRAND.color.dark);
+        doc.text(b.text, tx, ty, { width: innerW, lineBreak: true, lineGap: lg });
+      }
+    }
+    ty += blockHeight(b.text, isEmail) + (i < blocks.length - 1 ? E().calloutInteriorGap : 0);
   });
 
   doc.y = y0 + boxH + BRAND.space.afterPara;
@@ -483,7 +765,16 @@ function flowProposal(doc, index, rawText) {
   ensureRoom(doc, oneLine + 4);
   doc.font(BRAND.font.bold).fontSize(BRAND.size.body).fillColor(BRAND.color.dark);
   doc.text(prefix, ml(), doc.y, { continued: true, lineBreak: false });
-  doc.font(BRAND.font.regular).text(t, { width: w, lineBreak: true, lineGap: lg });
+  const runs = parseStrongRuns(t);
+  const proposalFirstX = doc.x;
+  const proposalFirstY = doc.y;
+  const proposalFirstW = ml() + cw() - proposalFirstX;
+  if (runs.some((r) => r.bold)) {
+    emitStrongRuns(doc, runs, proposalFirstX, proposalFirstY, proposalFirstW, lg, BRAND.color.dark, ml(), cw());
+  } else {
+    doc.font(BRAND.font.regular).fillColor(BRAND.color.dark).text(t, { width: w, lineBreak: true, lineGap: lg });
+  }
+  doc.font(BRAND.font.regular).fontSize(BRAND.size.body).fillColor(BRAND.color.dark);
   doc.y += E().proposalSpacing;
 }
 

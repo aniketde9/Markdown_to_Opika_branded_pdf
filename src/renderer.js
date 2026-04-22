@@ -1,6 +1,7 @@
 'use strict';
 
 const BRAND = require('./brand');
+const { decodeHtmlEntities } = require('./htmlEntities');
 const { drawTable } = require('./tables');
 
 let state = {};
@@ -166,7 +167,7 @@ function renderInlineTokens(doc, tokens, width, opts = {}) {
 
     switch (t.type) {
       case 'text': {
-        let txt = t.raw || t.text || '';
+        let txt = decodeHtmlEntities(t.raw || t.text || '');
         if (assetLead && txt) {
           const m = txt.match(/^(\[[AB]\][\s\S]*?—\s*)([\s\S]*)$/);
           if (m) {
@@ -211,18 +212,19 @@ function renderInlineTokens(doc, tokens, width, opts = {}) {
           .font(BRAND.font.mono)
           .fontSize(BRAND.size.code)
           .fillColor(BRAND.color.navy)
-          .text(t.text, { continued, width });
+          .text(decodeHtmlEntities(t.text || ''), { continued, width });
         doc.font(BRAND.font.regular).fontSize(BRAND.size.body).fillColor(BRAND.color.dark);
         break;
 
       case 'link': {
-        const label = (t.text || '').trim();
+        const linkText = decodeHtmlEntities(t.text || '');
+        const label = linkText.trim();
         const isViewHere = /^view here$/i.test(label);
         const linkColor = isViewHere ? BRAND.color.pink : BRAND.color.navy;
         doc
           .font(BRAND.font.regular)
           .fillColor(linkColor)
-          .text(t.text, { continued, width, underline: true, link: t.href });
+          .text(linkText, { continued, width, underline: true, link: t.href });
         doc.fillColor(BRAND.color.dark);
         break;
       }
@@ -234,7 +236,7 @@ function renderInlineTokens(doc, tokens, width, opts = {}) {
 
       default:
         if (t.text || t.raw) {
-          doc.text(t.text || t.raw, { continued, width });
+          doc.text(decodeHtmlEntities(t.text || t.raw || ''), { continued, width });
         }
         break;
     }
@@ -245,7 +247,7 @@ function renderListItemContent(doc, item, textX, textW, startY) {
   if (!item.tokens || item.tokens.length === 0) {
     doc.x = textX;
     doc.y = startY;
-    doc.text(item.text || '', { width: textW });
+    doc.text(decodeHtmlEntities(item.text || ''), { width: textW });
     return;
   }
 
@@ -260,7 +262,7 @@ function renderListItemContent(doc, item, textX, textW, startY) {
     } else if (t.type === 'text' || t.raw) {
       if (!first) doc.y += 4;
       doc.x = textX;
-      doc.text(t.text || t.raw || '', { width: textW });
+      doc.text(decodeHtmlEntities(t.text || t.raw || ''), { width: textW });
       first = false;
     }
   }
@@ -357,7 +359,7 @@ function renderBlockquote(token) {
   const innerText = (token.tokens || [])
     .map((t) => {
       if (t.type === 'paragraph') return stripInlineTokens(t.tokens);
-      return t.text || '';
+      return decodeHtmlEntities(t.text || '');
     })
     .join(' ');
 
@@ -465,7 +467,7 @@ function renderTable(token) {
 
 function stripInlineTokens(tokens) {
   if (!tokens) return '';
-  return tokens.map((t) => t.text || t.raw || '').join('');
+  return tokens.map((t) => decodeHtmlEntities(t.text || t.raw || '')).join('');
 }
 
 module.exports = { renderTokens };
