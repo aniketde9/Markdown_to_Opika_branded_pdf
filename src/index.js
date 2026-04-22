@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { program } = require('commander');
 const { buildPDF, inferTitle } = require('./builder');
+const { splitFrontmatter, isEmmTemplate } = require('./emmParse');
 
 program
   .name('md-to-pdf')
@@ -60,7 +61,11 @@ async function main() {
       : inputPath.replace(/\.md$/i, '.pdf');
   }
 
-  const docTitle = opts.title || inferTitle(mdText, fallbackTitle);
+  const sp = splitFrontmatter(mdText);
+  const docTitle =
+    opts.title ||
+    (isEmmTemplate(sp.data) && sp.data.author && sp.data.author.name) ||
+    inferTitle(sp.body, fallbackTitle);
 
   try {
     await buildPDF({

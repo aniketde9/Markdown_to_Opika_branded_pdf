@@ -6,7 +6,9 @@ const path = require('path');
 const BRAND = require('./brand');
 const { parseMarkdown } = require('./parser');
 const { renderTokens } = require('./renderer');
-const { drawCoverPage } = require('./cover');
+const { attachRunningHeader, drawPreparedForBlock, drawMemorandumFooter } = require('./memorandumChrome');
+const { splitFrontmatter, isEmmTemplate } = require('./emmParse');
+const { renderEmmDocument } = require('./emmRender');
 
 const FONTS_DIR = path.join(__dirname, '../fonts');
 
@@ -31,6 +33,34 @@ function registerFonts(doc) {
 function inferTitle(mdText, fallback) {
   const h1 = mdText.match(/^#\s+(.+)$/m);
   return h1 ? h1[1].trim() : fallback;
+}
+
+/** With memorandum cover, first `#` is the recipient line — do not repeat in body. */
+function stripLeadingH1ForCover(tokens) {
+  if (!tokens || tokens.length === 0) return tokens;
+  const first = tokens[0];
+  if (first.type !== 'heading' || first.depth !== 1) return tokens;
+  return tokens.slice(1);
+}
+
+function mergeEmmAuthor(data, title, subtitle) {
+  const out = { ...data };
+  out.author = { ...(data.author || {}) };
+  if (title) out.author.name = title;
+  if (subtitle) out.author.bookLine = subtitle;
+  return out;
+}
+
+function applyFooters(doc) {
+  const range = doc.bufferedPageRange();
+  const total = range.count;
+  if (total < 1) return;
+  if (!doc._emmFooterApplied) doc._emmFooterApplied = new Set();
+  const lastPageIndex = range.start + total - 1;
+  if (doc._emmFooterApplied.has(lastPageIndex)) return;
+  doc._emmFooterApplied.add(lastPageIndex);
+  doc.switchToPage(lastPageIndex);
+  drawMemorandumFooter(doc, total, total);
 }
 
 /**
@@ -67,13 +97,35 @@ function buildPDF(options) {
       return;
     }
 
-    const docTitle = title || inferTitle(markdown, fallbackTitle);
-    let tokens;
+    let frontData;
+    let bodyMarkdown;
     try {
-      tokens = parseMarkdown(markdown);
+      const sp = splitFrontmatter(markdown);
+      frontData = sp.data;
+      bodyMarkdown = sp.body;
     } catch (e) {
       reject(e);
       return;
+    }
+
+    const useEmm = isEmmTemplate(frontData);
+    const emmData = useEmm ? mergeEmmAuthor(frontData, title || null, subtitle || null) : null;
+
+    const docTitle = useEmm
+      ? emmData.author?.name || title || fallbackTitle
+      : title || inferTitle(bodyMarkdown, fallbackTitle);
+
+    let tokens;
+    if (!useEmm) {
+      try {
+        tokens = parseMarkdown(bodyMarkdown);
+      } catch (e) {
+        reject(e);
+        return;
+      }
+      if (cover) {
+        tokens = stripLeadingH1ForCover(tokens);
+      }
     }
 
     const doc = new PDFDocument({
@@ -84,7 +136,7 @@ function buildPDF(options) {
         left: BRAND.page.marginLeft,
         right: BRAND.page.marginRight,
       },
-      bufferPages: false,
+      bufferPages: true,
       autoFirstPage: false,
       info: {
         Title: docTitle,
@@ -105,17 +157,29 @@ function buildPDF(options) {
 
     doc.pipe(stream);
 
-    if (cover) {
-      drawCoverPage(doc, docTitle, subtitle);
-      doc.addPage();
-    } else {
-      doc.addPage();
+    if (header) {
+      attachRunningHeader(doc);
     }
 
-    renderTokens(doc, tokens, {
-      showHeader: header,
-      title: docTitle,
-    });
+    doc.addPage();
+
+    if (useEmm) {
+      if (cover && emmData.author && emmData.author.name) {
+        const bookLine = emmData.author.bookLine || emmData.author.bookSubtitle || '';
+        drawPreparedForBlock(doc, emmData.author.name, bookLine);
+      }
+      renderEmmDocument(doc, emmData);
+    } else {
+      if (cover) {
+        drawPreparedForBlock(doc, docTitle, subtitle || '');
+      }
+      renderTokens(doc, tokens, {
+        showHeader: false,
+        title: docTitle,
+      });
+    }
+
+    applyFooters(doc);
 
     stream.once('finish', () => {
       stream.removeListener('error', onError);

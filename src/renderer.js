@@ -5,9 +5,9 @@ const { drawTable } = require('./tables');
 
 let state = {};
 
-/** Last Y coordinate usable for starting new body content (above bottom margin). */
+/** Last Y coordinate usable for starting new body content (above running footer). */
 function bodyContentBottom() {
-  return BRAND.page.height - BRAND.page.marginBottom;
+  return BRAND.bodyContentMaxY;
 }
 
 /** If the cursor is too low to fit `minHeight`, start a new page and reset the header margin. */
@@ -31,46 +31,7 @@ function initState(doc, showHeader, title) {
     listCounters: [],
   };
 
-  if (showHeader) drawHeader(doc, title);
-
-  doc.on('pageAdded', () => {
-    if (showHeader) drawHeader(doc, title);
-  });
-}
-
-function drawHeader(doc, title) {
-  const y = BRAND.page.marginTop - 28;
-
-  doc
-    .moveTo(BRAND.page.marginLeft, y + 14)
-    .lineTo(BRAND.page.width - BRAND.page.marginRight, y + 14)
-    .lineWidth(0.5)
-    .strokeColor(BRAND.color.grey)
-    .stroke();
-
-  doc
-    .font(BRAND.font.regular)
-    .fontSize(BRAND.size.footer)
-    .fillColor(BRAND.color.grey)
-    .text(title, BRAND.page.marginLeft, y, {
-      width: BRAND.contentWidth * 0.7,
-      align: 'left',
-      lineBreak: false,
-    });
-
-  doc
-    .font(BRAND.font.mono)
-    .fontSize(BRAND.size.footer)
-    .fillColor(BRAND.color.pink)
-    .text('OPIKA', BRAND.page.marginLeft, y, {
-      width: BRAND.contentWidth,
-      align: 'right',
-      lineBreak: false,
-    });
-
-  // PDFKit advances doc.y/doc.x from text(); reset so body flow starts at the real top margin.
   doc.x = BRAND.page.marginLeft;
-  doc.y = BRAND.page.marginTop;
 }
 
 function renderTokens(doc, tokens, opts = {}) {
@@ -118,51 +79,46 @@ function renderHeading(token) {
   const { doc } = state;
   const level = token.depth;
   const text = stripInlineTokens(token.tokens);
+  const majorSection = level === 1 || level === 2;
+  const sectionLabel = majorSection ? String(text).toUpperCase() : text;
 
   ensureRoom(doc, 56);
 
   const cfg =
-    {
-      1: {
-        font: BRAND.font.mono,
-        size: BRAND.size.h1,
-        color: BRAND.color.navy,
-        spaceBefore: 18,
-        spaceAfter: BRAND.space.afterH1,
-        rule: true,
-      },
-      2: {
-        font: BRAND.font.mono,
-        size: BRAND.size.h2,
-        color: BRAND.color.navy,
-        spaceBefore: 14,
-        spaceAfter: BRAND.space.afterH2,
-        rule: false,
-      },
-      3: {
-        font: BRAND.font.bold,
-        size: BRAND.size.h3,
-        color: BRAND.color.dark,
-        spaceBefore: 10,
-        spaceAfter: BRAND.space.afterH3,
-        rule: false,
-      },
-      4: {
-        font: BRAND.font.bold,
-        size: BRAND.size.body,
-        color: BRAND.color.dark,
-        spaceBefore: 8,
-        spaceAfter: 4,
-        rule: false,
-      },
-    }[level] || {
-      font: BRAND.font.bold,
-      size: BRAND.size.body,
-      color: BRAND.color.dark,
-      spaceBefore: 6,
-      spaceAfter: 4,
-      rule: false,
-    };
+    majorSection
+      ? {
+          font: BRAND.font.mono,
+          size: BRAND.emm.sectionTitleSize,
+          color: BRAND.color.navy,
+          spaceBefore: level === 1 ? 14 : 12,
+          spaceAfter: BRAND.space.afterH1,
+          rule: true,
+        }
+      : {
+          3: {
+            font: BRAND.font.bold,
+            size: BRAND.size.h3,
+            color: BRAND.color.dark,
+            spaceBefore: 10,
+            spaceAfter: BRAND.space.afterH3,
+            rule: false,
+          },
+          4: {
+            font: BRAND.font.bold,
+            size: BRAND.size.body,
+            color: BRAND.color.dark,
+            spaceBefore: 8,
+            spaceAfter: 4,
+            rule: false,
+          },
+        }[level] || {
+          font: BRAND.font.bold,
+          size: BRAND.size.body,
+          color: BRAND.color.dark,
+          spaceBefore: 6,
+          spaceAfter: 4,
+          rule: false,
+        };
 
   doc.x = state.x;
   doc.y += cfg.spaceBefore;
@@ -171,32 +127,36 @@ function renderHeading(token) {
     .font(cfg.font)
     .fontSize(cfg.size)
     .fillColor(cfg.color)
-    .text(text, state.x, doc.y, { width: state.contentW, lineBreak: true });
+    .text(sectionLabel, state.x, doc.y, { width: state.contentW, lineBreak: true, lineGap: BRAND.emm.lineGap });
 
   if (cfg.rule) {
-    const ruleY = doc.y + 4;
+    const ruleY = doc.y + BRAND.emm.ruleGapBelowHeading;
     doc
       .moveTo(state.x, ruleY)
       .lineTo(state.x + state.contentW, ruleY)
-      .lineWidth(2.5)
+      .lineWidth(3)
       .strokeColor(BRAND.color.pink)
       .stroke();
-    doc.y = ruleY + 10;
+    doc.y = ruleY + BRAND.emm.afterSectionRule + cfg.spaceAfter;
+  } else {
+    doc.y += cfg.spaceAfter;
   }
-
-  doc.y += cfg.spaceAfter;
 }
 
 function renderParagraph(token) {
   const { doc } = state;
   ensureRoom(doc, 48);
   doc.x = state.x;
-  renderInlineTokens(doc, token.tokens, state.contentW);
+  const plain = stripInlineTokens(token.tokens || []).trimStart();
+  const assetLead = /^\[[AB]\]/.test(plain);
+  renderInlineTokens(doc, token.tokens, state.contentW, { assetLead });
   doc.y += BRAND.space.afterPara;
 }
 
-function renderInlineTokens(doc, tokens, width) {
+function renderInlineTokens(doc, tokens, width, opts = {}) {
   if (!tokens || tokens.length === 0) return;
+
+  let assetLead = opts.assetLead || false;
 
   doc.font(BRAND.font.regular).fontSize(BRAND.size.body).fillColor(BRAND.color.dark);
 
@@ -205,17 +165,41 @@ function renderInlineTokens(doc, tokens, width) {
     const continued = i < lastIdx;
 
     switch (t.type) {
-      case 'text':
-        doc.text(t.raw || t.text || '', { continued, width });
+      case 'text': {
+        let txt = t.raw || t.text || '';
+        if (assetLead && txt) {
+          const m = txt.match(/^(\[[AB]\][\s\S]*?—\s*)([\s\S]*)$/);
+          if (m) {
+            doc
+              .font(BRAND.font.bold)
+              .fillColor(BRAND.color.orange)
+              .text(m[1], { continued: true, width });
+            assetLead = false;
+            txt = m[2] || '';
+            if (!txt) {
+              doc.font(BRAND.font.regular).fillColor(BRAND.color.dark);
+              return;
+            }
+          }
+        }
+        doc.font(BRAND.font.regular).fillColor(BRAND.color.dark).text(txt, { continued, width });
         break;
+      }
 
-      case 'strong':
-        doc
-          .font(BRAND.font.bold)
-          .fillColor(BRAND.color.navy)
-          .text(stripInlineTokens(t.tokens), { continued, width });
-        doc.font(BRAND.font.regular).fillColor(BRAND.color.dark);
+      case 'strong': {
+        const inner = stripInlineTokens(t.tokens);
+        if (assetLead && /^\[[AB]\]/.test(inner)) {
+          doc.font(BRAND.font.bold).fillColor(BRAND.color.orange).text(inner, { continued, width });
+          assetLead = false;
+        } else {
+          doc
+            .font(BRAND.font.bold)
+            .fillColor(BRAND.color.navy)
+            .text(inner, { continued, width });
+          doc.font(BRAND.font.regular).fillColor(BRAND.color.dark);
+        }
         break;
+      }
 
       case 'em':
         doc.font(BRAND.font.italic).text(stripInlineTokens(t.tokens), { continued, width });
@@ -231,12 +215,17 @@ function renderInlineTokens(doc, tokens, width) {
         doc.font(BRAND.font.regular).fontSize(BRAND.size.body).fillColor(BRAND.color.dark);
         break;
 
-      case 'link':
+      case 'link': {
+        const label = (t.text || '').trim();
+        const isViewHere = /^view here$/i.test(label);
+        const linkColor = isViewHere ? BRAND.color.pink : BRAND.color.navy;
         doc
-          .fillColor(BRAND.color.navy)
+          .font(BRAND.font.regular)
+          .fillColor(linkColor)
           .text(t.text, { continued, width, underline: true, link: t.href });
         doc.fillColor(BRAND.color.dark);
         break;
+      }
 
       case 'softbreak':
       case 'hardbreak':
@@ -373,11 +362,34 @@ function renderBlockquote(token) {
     .join(' ');
 
   const boxW = state.contentW;
-  const textH = doc.heightOfString(innerText, {
-    font: BRAND.font.regular,
-    size: BRAND.size.body,
-    width: boxW - 32,
-  });
+  const pad = 16;
+  const textW = boxW - pad * 2;
+  const leadMatch = innerText.match(/^([^:]+:)(\s*)([\s\S]*)$/);
+
+  let textH;
+  if (leadMatch && leadMatch[3].trim()) {
+    const lead = leadMatch[1];
+    const rest = leadMatch[3].trim();
+    textH =
+      doc.heightOfString(lead, {
+        font: BRAND.font.bold,
+        size: BRAND.size.body,
+        width: textW,
+      }) +
+      4 +
+      doc.heightOfString(rest, {
+        font: BRAND.font.regular,
+        size: BRAND.size.body,
+        width: textW,
+      });
+  } else {
+    textH = doc.heightOfString(innerText, {
+      font: BRAND.font.regular,
+      size: BRAND.size.body,
+      width: textW,
+    });
+  }
+
   const boxH = textH + 24;
   const boxX = state.x;
   const drawY = doc.y;
@@ -389,18 +401,41 @@ function renderBlockquote(token) {
   }
 
   const y2 = doc.y;
-  doc.rect(boxX, y2, boxW, boxH).fill(BRAND.color.light);
+  doc.rect(boxX, y2, boxW, boxH).fill(BRAND.color.pinkTint);
 
   doc.rect(boxX, y2, 4, boxH).fill(BRAND.color.pink);
 
-  doc
-    .font(BRAND.font.regular)
-    .fontSize(BRAND.size.body)
-    .fillColor(BRAND.color.navy)
-    .text(innerText, boxX + 16, y2 + 12, {
-      width: boxW - 32,
-      lineBreak: true,
+  const textX = boxX + pad;
+  let ty = y2 + 12;
+
+  if (leadMatch && leadMatch[3].trim()) {
+    const lead = leadMatch[1];
+    const rest = leadMatch[3].trim();
+    doc
+      .font(BRAND.font.bold)
+      .fontSize(BRAND.size.body)
+      .fillColor(BRAND.color.pink)
+      .text(lead, textX, ty, { width: textW, lineBreak: true });
+    ty += doc.heightOfString(lead, {
+      font: BRAND.font.bold,
+      size: BRAND.size.body,
+      width: textW,
     });
+    doc
+      .font(BRAND.font.regular)
+      .fontSize(BRAND.size.body)
+      .fillColor(BRAND.color.dark)
+      .text(rest, textX, ty + 4, { width: textW, lineBreak: true });
+  } else {
+    doc
+      .font(BRAND.font.regular)
+      .fontSize(BRAND.size.body)
+      .fillColor(BRAND.color.dark)
+      .text(innerText, textX, ty, {
+        width: textW,
+        lineBreak: true,
+      });
+  }
 
   doc.x = state.x;
   doc.y = y2 + boxH + BRAND.space.afterPara;

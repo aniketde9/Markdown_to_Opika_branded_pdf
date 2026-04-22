@@ -3,6 +3,7 @@
 const path = require('path');
 const express = require('express');
 const { buildPDF, inferTitle } = require('./builder');
+const { splitFrontmatter, isEmmTemplate } = require('./emmParse');
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3847;
@@ -44,7 +45,11 @@ app.post('/convert', async (req, res) => {
   const cover = req.query.cover !== '0' && req.query.cover !== 'false';
   const header = req.query.header !== '0' && req.query.header !== 'false';
 
-  const docTitle = title || inferTitle(markdown, 'document');
+  const sp = splitFrontmatter(markdown);
+  const docTitle =
+    title ||
+    (isEmmTemplate(sp.data) && sp.data.author && sp.data.author.name) ||
+    inferTitle(sp.body, 'document');
   const safeName = docTitle.replace(/[^\w\- .]+/g, '').trim().slice(0, 80) || 'document';
 
   res.setHeader('Content-Type', 'application/pdf');

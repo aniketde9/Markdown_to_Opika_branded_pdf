@@ -3,7 +3,30 @@
 const BRAND = require('./brand');
 
 function contentBottom() {
-  return BRAND.page.height - BRAND.page.marginBottom;
+  return BRAND.bodyContentMaxY;
+}
+
+function getText(cell) {
+  if (typeof cell === 'string') return cell;
+  if (cell && cell.text) return cell.text;
+  if (cell && cell.tokens) return cell.tokens.map((t) => t.text || t.raw || '').join('');
+  return '';
+}
+
+function normalizeHeaderCell(h) {
+  return getText(h).replace(/\s+/g, ' ').trim().toUpperCase();
+}
+
+function isJourneyMapTable(headers) {
+  if (!headers || headers.length !== 3) return false;
+  const c = headers.map(normalizeHeaderCell);
+  return c[1].includes('GAP') && c[0].includes('WHERE') && c[2].includes('GOING');
+}
+
+function isSignalStatusTable(headers) {
+  if (!headers || headers.length !== 2) return false;
+  const c = headers.map(normalizeHeaderCell);
+  return c[0].includes('SIGNAL') && c[1].includes('STATUS');
 }
 
 function drawTable(doc, token, startX, totalWidth) {
@@ -15,13 +38,17 @@ function drawTable(doc, token, startX, totalWidth) {
     return;
   }
 
+  const journey = isJourneyMapTable(headers);
+  const signalTable = isSignalStatusTable(headers);
+
   let colWidths;
   if (colCount === 1) {
     colWidths = [totalWidth];
   } else if (colCount === 2) {
-    colWidths = [totalWidth * 0.35, totalWidth * 0.65];
+    colWidths = [totalWidth / 2, totalWidth / 2];
   } else if (colCount === 3) {
-    colWidths = [totalWidth * 0.25, totalWidth * 0.5, totalWidth * 0.25];
+    const w = totalWidth / 3;
+    colWidths = [w, w, w];
   } else if (colCount === 4) {
     colWidths = [totalWidth * 0.2, totalWidth * 0.35, totalWidth * 0.3, totalWidth * 0.15];
   } else {
@@ -29,8 +56,12 @@ function drawTable(doc, token, startX, totalWidth) {
     colWidths = Array(colCount).fill(w);
   }
 
-  const cellPadX = 8;
-  const cellPadY = 7;
+  const headerFills = journey
+    ? [BRAND.color.navy, BRAND.color.pink, BRAND.color.orange]
+    : null;
+
+  const cellPadX = 10;
+  const cellPadY = 8;
 
   let currentY = doc.y;
 
@@ -66,9 +97,10 @@ function drawTable(doc, token, startX, totalWidth) {
   }
 
   function drawHeaderRow(y) {
-    doc.rect(startX, y, totalWidth, headerHeight).fill(BRAND.color.navy);
     let cellX = startX;
     headers.forEach((cell, i) => {
+      const fill = headerFills ? headerFills[i] : BRAND.color.navy;
+      doc.rect(cellX, y, colWidths[i], headerHeight).fill(fill);
       doc
         .font(BRAND.font.bold)
         .fontSize(BRAND.size.tableHeader)
@@ -116,9 +148,17 @@ function drawTable(doc, token, startX, totalWidth) {
 
     let cellX = startX;
     texts.forEach((text, i) => {
-      const color = getCellColor(text);
+      const color = signalTable ? BRAND.color.dark : getCellColor(text);
+      let font = BRAND.font.regular;
+      if (journey) {
+        if (i === 1) font = BRAND.font.italic;
+        if (i === 2) font = BRAND.font.bold;
+      } else if (signalTable && i === 0) {
+        font = BRAND.font.bold;
+      }
+
       doc
-        .font(BRAND.font.regular)
+        .font(font)
         .fontSize(BRAND.size.tableBody)
         .fillColor(color)
         .text(text, cellX + cellPadX, currentY + cellPadY, {
@@ -149,13 +189,6 @@ function measureRowHeight(doc, texts, colWidths, padX, padY, font, size) {
     if (h > maxH) maxH = h;
   });
   return maxH + padY * 2;
-}
-
-function getText(cell) {
-  if (typeof cell === 'string') return cell;
-  if (cell && cell.text) return cell.text;
-  if (cell && cell.tokens) return cell.tokens.map((t) => t.text || t.raw || '').join('');
-  return '';
 }
 
 function getCellColor(text) {
