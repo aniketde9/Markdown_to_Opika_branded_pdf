@@ -2,7 +2,8 @@
 
 const path = require('path');
 const express = require('express');
-const { buildPDF, inferTitle } = require('./builder');
+const { inferTitle } = require('./builder');
+const { buildDocument } = require('./buildDocument');
 const { splitFrontmatter, isEmmTemplate } = require('./emmParse');
 
 const app = express();
@@ -44,6 +45,7 @@ app.post('/convert', async (req, res) => {
     null;
   const cover = req.query.cover !== '0' && req.query.cover !== 'false';
   const header = req.query.header !== '0' && req.query.header !== 'false';
+  const format = String(req.query.format || 'docx').toLowerCase() === 'pdf' ? 'pdf' : 'docx';
 
   const sp = splitFrontmatter(markdown);
   const docTitle =
@@ -52,11 +54,20 @@ app.post('/convert', async (req, res) => {
     inferTitle(sp.body, 'document');
   const safeName = docTitle.replace(/[^\w\- .]+/g, '').trim().slice(0, 80) || 'document';
 
-  res.setHeader('Content-Type', 'application/pdf');
-  res.setHeader('Content-Disposition', `attachment; filename="${safeName}.pdf"`);
+  if (format === 'pdf') {
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${safeName}.pdf"`);
+  } else {
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    );
+    res.setHeader('Content-Disposition', `attachment; filename="${safeName}.docx"`);
+  }
 
   try {
-    await buildPDF({
+    await buildDocument({
+      format,
       markdown,
       outputStream: res,
       title: title || undefined,

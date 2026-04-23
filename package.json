@@ -11,10 +11,11 @@
     "convert": "node src/index.js",
     "start": "node src/server.js",
     "setup:fonts": "node scripts/setup-fonts.mjs",
-    "test": "node src/index.js sample.md test_output.pdf"
+    "test": "node src/index.js sample.md test_output.docx"
   },
   "dependencies": {
     "commander": "^12.1.0",
+    "docx": "^9.5.1",
     "express": "^4.21.0",
     "marked": "^12.0.0",
     "pdfkit": "^0.15.0",

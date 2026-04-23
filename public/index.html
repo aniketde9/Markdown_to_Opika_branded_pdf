@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Markdown → Opika PDF</title>
+  <title>Markdown → Opika DOCX</title>
   <style>
     :root {
       --navy: #305a81;
@@ -65,8 +65,8 @@
 </head>
 <body>
   <header>
-    <h1>Markdown → Opika PDF</h1>
-    <p>Paste markdown below and download a branded PDF (local, no external APIs).</p>
+    <h1>Markdown → Opika DOCX</h1>
+    <p>Paste markdown below and download a branded DOCX (local, no external APIs).</p>
   </header>
   <main>
     <label for="md">Markdown</label>
@@ -75,7 +75,7 @@
       <label>Title (optional) <input type="text" id="title" placeholder="Overrides first # heading" /></label>
       <label>Subtitle (optional) <input type="text" id="subtitle" placeholder="Cover subtitle" /></label>
     </div>
-    <button type="button" id="go">Generate PDF</button>
+    <button type="button" id="go">Generate DOCX</button>
     <p class="err" id="err" hidden></p>
   </main>
   <script>
@@ -102,6 +102,7 @@
         const q = new URLSearchParams();
         if (titleEl.value.trim()) q.set('title', titleEl.value.trim());
         if (subtitleEl.value.trim()) q.set('subtitle', subtitleEl.value.trim());
+        q.set('format', 'docx');
         const url = '/convert' + (q.toString() ? '?' + q.toString() : '');
         const res = await fetch(url, {
           method: 'POST',
@@ -114,7 +115,7 @@
         }
         const blob = await res.blob();
         const cd = res.headers.get('Content-Disposition');
-        let filename = 'document.pdf';
+        let filename = 'document.docx';
         const m = cd && cd.match(/filename="([^"]+)"/);
         if (m) filename = m[1];
         const a = document.createElement('a');
